@@ -1,0 +1,600 @@
+# ═══════════════════════════════════════════════════════════════
+#  HOME ENERGY MONITOR
+#  ESP8266 NodeMCU v2 + 2x ADS1115
+# ═══════════════════════════════════════════════════════════════
+#
+#  HARDWARE
+#
+#  ESP8266 NodeMCU v2 / Amica
+#    - Powered by USB
+#    - D2 = SDA
+#    - D1 = SCL
+#
+#  ADS1115 #1 — address 0x48 — CURRENT
+#    ADDR -> GND
+#
+#    A0 = SCT013-000 service entrance L1
+#    A1 = SCT013-000 service entrance L2
+#    A2 = SCT013-000 generator L1
+#    A3 = reserved for generator L2
+#
+#  ADS1115 #2 — address 0x49 — VOLTAGE
+#    ADDR -> VDD
+#
+#    A0 = ZMPT101B service L1 -> neutral
+#    A1 = ZMPT101B service L2 -> neutral
+#
+#
+# ═══════════════════════════════════════════════════════════════
+#  MEASUREMENT NOTES
+# ═══════════════════════════════════════════════════════════════
+#
+#  CURRENT:
+#
+#  SCT013-000:
+#    100 A primary -> 50 mA secondary
+#    20 ohm burden resistor
+#
+#    0.050 A x 20 ohm = 1.0 V RMS at 100 A
+#
+#  Therefore our initial calibration is:
+#
+#    1.0 V RMS CT signal -> 100 A
+#
+#  The CT ADC remains at the ±4.096 V range because the theoretical
+#  100 A CT signal can reach approximately 1.414 V peak around the
+#  external ~1.65 V CT bias.
+#
+#
+#  VOLTAGE:
+#
+#  The ZMPT101B modules provide their own output biasing.
+#  They are NOT connected to the external CT VBIAS circuit.
+#
+#  The ZMPT modules will be adjusted so their output is approximately
+#  0.20 V RMS AC at the actual service voltage (~126 V).
+#
+#  At 0.20 V RMS:
+#
+#    Peak = 0.20 x sqrt(2)
+#         = approximately 0.283 V peak
+#
+#  With approximately 1.65 V output bias:
+#
+#    Maximum output ≈ 1.65 + 0.283
+#                   ≈ 1.93 V
+#
+#  This gives useful headroom below the ADS1115 ±2.048 V range.
+#
+#  The voltage ADS1115 therefore uses the ±2.048 V range for
+#  approximately 2x the sensitivity of the ±4.096 V setting.
+#
+#  Initial voltage calibration:
+#
+#    0.20 V RMS ZMPT signal -> 126 V mains
+#
+#  This MUST eventually be calibrated against a properly rated
+#  multimeter at the actual service voltage.
+#
+#
+#  SAMPLE RATE:
+#
+#  ADS1115 maximum conversion rate:
+#
+#    860 samples/second
+#
+#  This is explicitly configured below.
+#
+#  Both ADS1115 devices use continuous mode because the CT Clamp
+#  sensors perform repeated high-frequency sampling during their
+#  RMS measurement windows.
+#
+#
+#  POWER:
+#
+#  Power below is apparent power:
+#
+#    VA = Vrms x Arms
+#
+#  It is NOT true real power with power factor correction.
+#
+#  For resistive loads such as heaters this should be reasonably
+#  representative. Motors, compressors, switching supplies, etc.
+#  can read higher than their actual real power.
+#
+#
+# ═══════════════════════════════════════════════════════════════
+
+
+substitutions:
+  device_name: "home-energy-monitor"
+  friendly_name: "Home Energy Monitor"
+
+  # Generator rated continuous current.
+  generator_rated_amps: "30.0"
+
+
+# ═══════════════════════════════════════════════════════════════
+#  ESPHOME / HARDWARE
+# ═══════════════════════════════════════════════════════════════
+
+esphome:
+  name: ${device_name}
+  friendly_name: ${friendly_name}
+
+
+esp8266:
+  board: nodemcuv2
+
+
+logger:
+
+
+# ═══════════════════════════════════════════════════════════════
+#  HOME ASSISTANT API
+# ═══════════════════════════════════════════════════════════════
+
+api:
+  encryption:
+    key: !secret api_encryption_key
+
+
+# ═══════════════════════════════════════════════════════════════
+#  OTA
+# ═══════════════════════════════════════════════════════════════
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+
+# ═══════════════════════════════════════════════════════════════
+#  WIFI
+# ═══════════════════════════════════════════════════════════════
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+  ap:
+    ssid: "${friendly_name} Fallback"
+
+
+captive_portal:
+
+
+# ═══════════════════════════════════════════════════════════════
+#  TIME
+# ═══════════════════════════════════════════════════════════════
+
+time:
+  - platform: homeassistant
+    id: ha_time
+
+
+# ═══════════════════════════════════════════════════════════════
+#  I2C
+# ═══════════════════════════════════════════════════════════════
+
+i2c:
+  sda: D2
+  scl: D1
+  scan: true
+  frequency: 400kHz
+
+
+# ═══════════════════════════════════════════════════════════════
+#  ADS1115
+# ═══════════════════════════════════════════════════════════════
+#
+#  Both ADCs run in continuous mode.
+#
+#  ADS1115 maximum conversion rate:
+#
+#    860 SPS
+#
+#  The CT Clamp sensors perform their own RMS sampling windows
+#  using these ADC channels.
+#
+# ═══════════════════════════════════════════════════════════════
+
+ads1115:
+
+  # ─────────────────────────────────────────────────────────────
+  # CURRENT ADC
+  #
+  # ±4.096 V range
+  #
+  # Kept at 4.096 V because the SCT013-000 can theoretically
+  # produce approximately 1.414 V peak at 100 A around the
+  # external ~1.65 V bias.
+  # ─────────────────────────────────────────────────────────────
+
+  - address: 0x48
+    id: ads_current
+    continuous_mode: true
+
+
+  # ─────────────────────────────────────────────────────────────
+  # VOLTAGE ADC
+  #
+  # ±2.048 V range
+  #
+  # Approximately 2x the sensitivity of the ±4.096 V setting.
+  #
+  # ZMPT output will be adjusted to approximately 0.20 V RMS
+  # at approximately 126 V mains.
+  # ─────────────────────────────────────────────────────────────
+
+  - address: 0x49
+    id: ads_voltage
+    continuous_mode: true
+
+
+# ═══════════════════════════════════════════════════════════════
+#  SENSORS
+# ═══════════════════════════════════════════════════════════════
+
+sensor:
+
+
+  # ════════════════════════════════════════════════════════════
+  #  CURRENT — RAW ADS1115 CHANNELS
+  # ════════════════════════════════════════════════════════════
+
+
+  # ─────────────────────────────────────────────────────────────
+  # SERVICE L1 CT
+  # ─────────────────────────────────────────────────────────────
+
+  - platform: ads1115
+    id: raw_service_l1
+    ads1115_id: ads_current
+    multiplexer: 'A0_GND'
+    gain: 4.096
+    sample_rate: 860
+    update_interval: 1s
+    internal: true
+
+
+  # ─────────────────────────────────────────────────────────────
+  # SERVICE L2 CT
+  # ─────────────────────────────────────────────────────────────
+
+  - platform: ads1115
+    id: raw_service_l2
+    ads1115_id: ads_current
+    multiplexer: 'A1_GND'
+    gain: 4.096
+    sample_rate: 860
+    update_interval: 1s
+    internal: true
+
+
+  # ─────────────────────────────────────────────────────────────
+  # GENERATOR L1 CT
+  # ─────────────────────────────────────────────────────────────
+
+  - platform: ads1115
+    id: raw_generator_l1
+    ads1115_id: ads_current
+    multiplexer: 'A2_GND'
+    gain: 4.096
+    sample_rate: 860
+    update_interval: 1s
+    internal: true
+
+
+  # ─────────────────────────────────────────────────────────────
+  # GENERATOR L2 CT — RESERVED
+  # ─────────────────────────────────────────────────────────────
+
+  # - platform: ads1115
+  #   id: raw_generator_l2
+  #   ads1115_id: ads_current
+  #   multiplexer: 'A3_GND'
+  #   gain: 4.096
+  #   sample_rate: 860
+  #   update_interval: 1s
+  #   internal: true
+
+
+  # ════════════════════════════════════════════════════════════
+  #  CURRENT — RMS / CALIBRATED
+  # ════════════════════════════════════════════════════════════
+
+
+  # ─────────────────────────────────────────────────────────────
+  # SERVICE L1 CURRENT
+  # ─────────────────────────────────────────────────────────────
+
+  - platform: ct_clamp
+    id: current_service_l1
+    sensor: raw_service_l1
+    name: "Service Entrance L1 Current"
+
+    update_interval: 5s
+    sample_duration: 200ms
+
+    accuracy_decimals: 2
+
+    unit_of_measurement: "A"
+    device_class: current
+    state_class: measurement
+
+    filters:
+      - calibrate_linear:
+          - 0.0 -> 0.0
+          - 1.0 -> 100.0
+
+
+  # ─────────────────────────────────────────────────────────────
+  # SERVICE L2 CURRENT
+  # ─────────────────────────────────────────────────────────────
+
+  - platform: ct_clamp
+    id: current_service_l2
+    sensor: raw_service_l2
+    name: "Service Entrance L2 Current"
+
+    update_interval: 5s
+    sample_duration: 200ms
+
+    accuracy_decimals: 2
+
+    unit_of_measurement: "A"
+    device_class: current
+    state_class: measurement
+
+    filters:
+      - calibrate_linear:
+          - 0.0 -> 0.0
+          - 1.0 -> 100.0
+
+
+  # ─────────────────────────────────────────────────────────────
+  # GENERATOR L1 CURRENT
+  # ─────────────────────────────────────────────────────────────
+
+  - platform: ct_clamp
+    id: current_generator_l1
+    sensor: raw_generator_l1
+    name: "Generator L1 Current"
+
+    update_interval: 5s
+    sample_duration: 200ms
+
+    accuracy_decimals: 2
+
+    unit_of_measurement: "A"
+    device_class: current
+    state_class: measurement
+
+    filters:
+      - calibrate_linear:
+          - 0.0 -> 0.0
+          - 1.0 -> 100.0
+
+
+  # ════════════════════════════════════════════════════════════
+  #  VOLTAGE — RAW ADS1115 CHANNELS
+  # ════════════════════════════════════════════════════════════
+  #
+  #  ZMPT101B modules provide their own output bias.
+  #
+  #  Target:
+  #
+  #    ~0.20 V RMS at ~126 V mains
+  #
+  #  The voltage ADS uses the ±2.048 V range for approximately
+  #  2x the sensitivity of the previous ±4.096 V configuration.
+  #
+  # ════════════════════════════════════════════════════════════
+
+
+  # ─────────────────────────────────────────────────────────────
+  # SERVICE L1 VOLTAGE RAW
+  # ─────────────────────────────────────────────────────────────
+
+  - platform: ads1115
+    id: raw_voltage_l1
+    ads1115_id: ads_voltage
+    multiplexer: 'A0_GND'
+    gain: 2.048
+    sample_rate: 860
+    update_interval: 1s
+    internal: true
+
+
+  # ─────────────────────────────────────────────────────────────
+  # SERVICE L2 VOLTAGE RAW
+  # ─────────────────────────────────────────────────────────────
+
+  - platform: ads1115
+    id: raw_voltage_l2
+    ads1115_id: ads_voltage
+    multiplexer: 'A1_GND'
+    gain: 2.048
+    sample_rate: 860
+    update_interval: 1s
+    internal: true
+
+
+  # ════════════════════════════════════════════════════════════
+  #  VOLTAGE — RMS / CALIBRATED
+  # ════════════════════════════════════════════════════════════
+  #
+  #  ZMPT target calibration:
+  #
+  #      0.20 V RMS -> approximately 126 V mains
+  #
+  #  This MUST be verified against a properly rated multimeter.
+  #
+  #  Once the ZMPT output is adjusted and measured, replace the
+  #  calibration point below with the actual measured values.
+  #
+  # ════════════════════════════════════════════════════════════
+
+
+  # ─────────────────────────────────────────────────────────────
+  # SERVICE L1 VOLTAGE
+  # ─────────────────────────────────────────────────────────────
+
+  - platform: ct_clamp
+    id: voltage_l1
+    sensor: raw_voltage_l1
+    name: "Service L1 Voltage"
+
+    update_interval: 5s
+    sample_duration: 200ms
+
+    accuracy_decimals: 1
+
+    unit_of_measurement: "V"
+    device_class: voltage
+    state_class: measurement
+
+    filters:
+      - calibrate_linear:
+          - 0.0 -> 0.0
+          - 0.20 -> 126.0
+
+
+  # ─────────────────────────────────────────────────────────────
+  # SERVICE L2 VOLTAGE
+  # ─────────────────────────────────────────────────────────────
+
+  - platform: ct_clamp
+    id: voltage_l2
+    sensor: raw_voltage_l2
+    name: "Service L2 Voltage"
+
+    update_interval: 5s
+    sample_duration: 200ms
+
+    accuracy_decimals: 1
+
+    unit_of_measurement: "V"
+    device_class: voltage
+    state_class: measurement
+
+    filters:
+      - calibrate_linear:
+          - 0.0 -> 0.0
+          - 0.20 -> 126.0
+
+
+  # ════════════════════════════════════════════════════════════
+  #  POWER
+  # ════════════════════════════════════════════════════════════
+  #
+  #  Apparent power:
+  #
+  #      VA = Vrms x Arms
+  #
+  #  For resistive loads this should be reasonably close to real
+  #  power.
+  #
+  # ════════════════════════════════════════════════════════════
+
+
+  # ─────────────────────────────────────────────────────────────
+  # SERVICE L1 POWER
+  # ─────────────────────────────────────────────────────────────
+
+  - platform: template
+    name: "Service L1 Power"
+    id: power_l1
+
+    unit_of_measurement: "W"
+    device_class: power
+    state_class: measurement
+
+    accuracy_decimals: 0
+    update_interval: 5s
+
+    lambda: |-
+      return id(voltage_l1).state *
+             id(current_service_l1).state;
+
+
+  # ─────────────────────────────────────────────────────────────
+  # SERVICE L2 POWER
+  # ─────────────────────────────────────────────────────────────
+
+  - platform: template
+    name: "Service L2 Power"
+    id: power_l2
+
+    unit_of_measurement: "W"
+    device_class: power
+    state_class: measurement
+
+    accuracy_decimals: 0
+    update_interval: 5s
+
+    lambda: |-
+      return id(voltage_l2).state *
+             id(current_service_l2).state;
+
+
+  # ─────────────────────────────────────────────────────────────
+  # TOTAL SERVICE POWER
+  # ─────────────────────────────────────────────────────────────
+
+  - platform: template
+    name: "Total Service Power"
+    id: power_total
+
+    unit_of_measurement: "W"
+    device_class: power
+    state_class: measurement
+
+    accuracy_decimals: 0
+    update_interval: 5s
+
+    lambda: |-
+      return id(power_l1).state +
+             id(power_l2).state;
+
+
+  # ════════════════════════════════════════════════════════════
+  #  GENERATOR LOAD
+  # ════════════════════════════════════════════════════════════
+
+  - platform: template
+    name: "Generator Load Percent"
+    id: generator_load_percent
+
+    unit_of_measurement: "%"
+    state_class: measurement
+
+    accuracy_decimals: 0
+    update_interval: 5s
+
+    lambda: |-
+      return (id(current_generator_l1).state /
+              ${generator_rated_amps}) * 100.0;
+
+
+  # ════════════════════════════════════════════════════════════
+  #  DAILY ENERGY
+  # ════════════════════════════════════════════════════════════
+  #
+  #  power_total is in watts.
+  #
+  # ════════════════════════════════════════════════════════════
+
+  - platform: total_daily_energy
+    name: "Total Daily Energy"
+
+    power_id: power_total
+
+    unit_of_measurement: "kWh"
+    device_class: energy
+    state_class: total_increasing
+
+    accuracy_decimals: 2
+
+    filters:
+      - multiply: 0.001
